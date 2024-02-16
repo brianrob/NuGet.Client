@@ -5,10 +5,12 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Diagnostics.Tracing;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using NuGet.Common;
+using NuGet.DependencyResolver.Core;
 using NuGet.Frameworks;
 using NuGet.LibraryModel;
 using NuGet.Packaging;
@@ -19,6 +21,8 @@ namespace NuGet.DependencyResolver
 {
     public class RemoteDependencyWalker
     {
+        private static readonly EventSource Log = new EventSource("NuGet-RemoteDependencyWalker");
+
         private readonly RemoteWalkContext _context;
 
         public RemoteDependencyWalker(RemoteWalkContext context)
@@ -28,7 +32,9 @@ namespace NuGet.DependencyResolver
 
         public async Task<GraphNode<RemoteResolveResult>> WalkAsync(LibraryRange library, NuGetFramework framework, string runtimeIdentifier, RuntimeGraph runtimeGraph, bool recursive)
         {
+            Log.Write("WalkAsync", new { Library = library.Name, VersionRange = library?.VersionRange?.ToString() });
             var transitiveCentralPackageVersions = new TransitiveCentralPackageVersions();
+            var globalPackageList = new GlobalPackageList();
             var rootNode = await CreateGraphNodeAsync(
                 libraryRange: library,
                 framework: framework,
@@ -37,7 +43,45 @@ namespace NuGet.DependencyResolver
                 predicate: _ => (recursive ? DependencyResult.Acceptable : DependencyResult.Eclipsed, null),
                 outerEdge: null,
                 transitiveCentralPackageVersions: transitiveCentralPackageVersions,
+                globalPackageList: globalPackageList,
                 hasParentNodes: false);
+
+            if (Log.IsEnabled())
+            {
+                Dictionary<string, int> packageHitCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                int directChildren = rootNode.InnerNodes.Count;
+                int transitiveChildren = directChildren;
+                var queue = new Queue<GraphNode<RemoteResolveResult>>(rootNode.InnerNodes);
+                while (queue.Count > 0)
+                {
+                    var node = queue.Dequeue();
+
+                    if (packageHitCount.TryGetValue(node.Key.Name, out int count))
+                    {
+                        packageHitCount[node.Key.Name] = count + 1;
+                    }
+                    else
+                    {
+                        packageHitCount[node.Key.Name] = 1;
+                    }
+
+                    if (node.InnerNodes.Count > 0)
+                    {
+                        transitiveChildren += node.InnerNodes.Count;
+                        foreach (var innerNode in node.InnerNodes)
+                        {
+                            queue.Enqueue(innerNode);
+                        }
+                    }
+                }
+
+                Log.Write("WalkAsyncResultStart", new { Library = library.Name, DirectChildren = directChildren, TransitiveChildren = transitiveChildren });
+                foreach (KeyValuePair<string, int> package in packageHitCount)
+                {
+                    Log.Write("WalkAsyncTransitivePackage", new { Package = package.Key, TransitiveHitCount = package.Value });
+                }
+                Log.Write("WalkAsyncResultStop");
+            }
 
             // do not calculate the hashset of the direct dependencies for cases when there are not any elements in the transitiveCentralPackageVersions queue
             var indexedDirectDependenciesKeyNames = new Lazy<HashSet<string>>(
@@ -57,7 +101,7 @@ namespace NuGet.DependencyResolver
                     // as the nodes are created more parents can be added for a single central transitive node
                     // keep the list of the nodes created and add the parents's references at the end
                     // the parent references are needed to keep track of possible rejected parents
-                    transitiveCentralPackageVersionNodes.Add(await AddTransitiveCentralPackageVersionNodesAsync(rootNode, centralPackageVersionDependency, framework, runtimeIdentifier, runtimeGraph, transitiveCentralPackageVersions));
+                    transitiveCentralPackageVersionNodes.Add(await AddTransitiveCentralPackageVersionNodesAsync(rootNode, centralPackageVersionDependency, framework, runtimeIdentifier, runtimeGraph, transitiveCentralPackageVersions, globalPackageList));
                 }
             }
             transitiveCentralPackageVersionNodes.ForEach(node => transitiveCentralPackageVersions.AddParentsToNode(node));
@@ -73,6 +117,7 @@ namespace NuGet.DependencyResolver
             Func<LibraryRange, (DependencyResult dependencyResult, LibraryDependency conflictingDependency)> predicate,
             GraphEdge<RemoteResolveResult> outerEdge,
             TransitiveCentralPackageVersions transitiveCentralPackageVersions,
+            GlobalPackageList globalPackageList,
             bool hasParentNodes)
         {
             HashSet<LibraryDependency> runtimeDependencies = null;
@@ -91,6 +136,30 @@ namespace NuGet.DependencyResolver
                 _context,
                 CancellationToken.None);
 
+            // BRIANROB: item.Data.Dependencies contains the direct dependencies for this node.
+            // Before we call EvaluateDependencies, we need to see if we've already seen the dependency.  If we have, then we should adjust it's version if required,
+            // and then we should remove the node so that it doesn't get reevaluated.
+            List<LibraryDependency> toRemove = new List<LibraryDependency>();
+            foreach (LibraryDependency dependency in item.Data.Dependencies)
+            {
+                if (globalPackageList.AddOrUpdatePackage(dependency.Name, dependency.LibraryRange.VersionRange))
+                {
+                    // The package was added to the global package list, so we should keep it in the graph.
+                    continue;
+                }
+
+                // The package was not added to the global package list, so we should remove it from the graph.
+                toRemove.Add(dependency);
+            }
+
+            if (toRemove.Count > 0)
+            {
+                foreach(LibraryDependency dependency in toRemove)
+                {
+                    item.Data.Dependencies.Remove(dependency);
+                }
+            }
+
             bool hasInnerNodes = (item.Data.Dependencies.Count + (runtimeDependencies == null ? 0 : runtimeDependencies.Count)) > 0;
             GraphNode<RemoteResolveResult> node = new GraphNode<RemoteResolveResult>(libraryRange, hasInnerNodes, hasParentNodes)
             {
@@ -100,7 +169,7 @@ namespace NuGet.DependencyResolver
             Debug.Assert(node.Item != null, "FindLibraryCached should return an unresolved item instead of null");
             MergeRuntimeDependencies(runtimeDependencies, node);
 
-            LightweightList<ValueTask<GraphNode<RemoteResolveResult>>> tasks = EvaluateDependencies(libraryRange, framework, runtimeName, runtimeGraph, predicate, outerEdge, transitiveCentralPackageVersions, node);
+            LightweightList<ValueTask<GraphNode<RemoteResolveResult>>> tasks = EvaluateDependencies(libraryRange, framework, runtimeName, runtimeGraph, predicate, outerEdge, transitiveCentralPackageVersions, globalPackageList, node);
 
             node.EnsureInnerNodeCapacity(tasks.Count);
             foreach (var task in tasks)
@@ -112,7 +181,7 @@ namespace NuGet.DependencyResolver
 
             return node;
 
-            LightweightList<ValueTask<GraphNode<RemoteResolveResult>>> EvaluateDependencies(LibraryRange libraryRange, NuGetFramework framework, string runtimeName, RuntimeGraph runtimeGraph, Func<LibraryRange, (DependencyResult dependencyResult, LibraryDependency conflictingDependency)> predicate, GraphEdge<RemoteResolveResult> outerEdge, TransitiveCentralPackageVersions transitiveCentralPackageVersions, GraphNode<RemoteResolveResult> node)
+            LightweightList<ValueTask<GraphNode<RemoteResolveResult>>> EvaluateDependencies(LibraryRange libraryRange, NuGetFramework framework, string runtimeName, RuntimeGraph runtimeGraph, Func<LibraryRange, (DependencyResult dependencyResult, LibraryDependency conflictingDependency)> predicate, GraphEdge<RemoteResolveResult> outerEdge, TransitiveCentralPackageVersions transitiveCentralPackageVersions, GlobalPackageList globalPackageList, GraphNode<RemoteResolveResult> node)
             {
                 var tasks = new LightweightList<ValueTask<GraphNode<RemoteResolveResult>>>();
                 // do not add nodes for all the centrally managed package versions to the graph
@@ -120,7 +189,7 @@ namespace NuGet.DependencyResolver
                 foreach (var dependency in node.Item.Data.Dependencies)
                 {
                     if (!IsDependencyValidForGraph(dependency))
-                    {
+                    { 
                         continue;
                     }
 
@@ -143,6 +212,7 @@ namespace NuGet.DependencyResolver
                             // Dependency edge from the current node to the dependency
                             var innerEdge = new GraphEdge<RemoteResolveResult>(outerEdge, node.Item, dependency);
 
+                            // BRIANROB: This is the recursive call back into CreateGraphNodeAsync to get the direct dependencies for this node.
                             tasks.Add(CreateGraphNodeAsync(
                                 dependency.LibraryRange,
                                 framework,
@@ -151,6 +221,7 @@ namespace NuGet.DependencyResolver
                                 predicate,
                                 innerEdge,
                                 transitiveCentralPackageVersions,
+                                globalPackageList,
                                 hasParentNodes: false));
                         }
                         else
@@ -467,7 +538,8 @@ namespace NuGet.DependencyResolver
             NuGetFramework framework,
             string runtimeIdentifier,
             RuntimeGraph runtimeGraph,
-            TransitiveCentralPackageVersions transitiveCentralPackageVersions)
+            TransitiveCentralPackageVersions transitiveCentralPackageVersions,
+            GlobalPackageList globalPackageList)
         {
             GraphNode<RemoteResolveResult> node = await CreateGraphNodeAsync(
                     libraryRange: centralPackageVersionDependency.LibraryRange,
@@ -477,6 +549,7 @@ namespace NuGet.DependencyResolver
                     predicate: ChainPredicate(_ => (DependencyResult.Acceptable, null), rootNode, centralPackageVersionDependency),
                     outerEdge: null,
                     transitiveCentralPackageVersions: transitiveCentralPackageVersions,
+                    globalPackageList: globalPackageList,
                     hasParentNodes: true);
 
             node.OuterNode = rootNode;
