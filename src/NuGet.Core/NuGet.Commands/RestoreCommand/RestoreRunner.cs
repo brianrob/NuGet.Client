@@ -24,6 +24,8 @@ namespace NuGet.Commands
         /// </summary>
         public static async Task<IReadOnlyList<RestoreSummary>> RunAsync(RestoreArgs restoreContext, CancellationToken token)
         {
+            PrototypeEventSource.Log.Write("RequestsGenerated");
+
             // Create requests
             var requests = await GetRequests(restoreContext);
 
@@ -278,7 +280,10 @@ namespace NuGet.Commands
             var request = summaryRequest.Request;
 
             var command = new RestoreCommand(request);
+
+            PrototypeEventSource.Log.Write("RestoreProjectStart", new { Project = request.Project.FilePath });
             var result = await command.ExecuteAsync(token);
+            PrototypeEventSource.Log.Write("RestoreProjectStop", new { Project = request.Project.FilePath });
 
             return new RestoreResultPair(summaryRequest, result);
         }
@@ -292,7 +297,10 @@ namespace NuGet.Commands
 
             // Commit the result
             log.LogVerbose(Strings.Log_Committing);
+
+            PrototypeEventSource.Log.Write("CommitAsyncStart", new { Project = summaryRequest.InputPath });
             await result.CommitAsync(log, token);
+            PrototypeEventSource.Log.Write("CommitAsyncStop", new { Project = summaryRequest.InputPath });
 
             if (result.Success)
             {

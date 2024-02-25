@@ -1,2 +1,3 @@
 #nullable enable
+NuGet.ProjectModel.HashObjectWriter.GetBytesWritten() -> long
 ~NuGet.ProjectModel.HashObjectWriter.WriteNonEmptyNameArray(string name, System.Collections.Generic.IEnumerable<string> values) -> void

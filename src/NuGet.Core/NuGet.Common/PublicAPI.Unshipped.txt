@@ -1,2 +1,4 @@
 #nullable enable
+NuGet.Common.PrototypeEventSource
 static NuGet.Common.MSBuildStringUtility.GetNuGetLogCodes(string! s) -> System.Collections.Generic.IList<NuGet.Common.NuGetLogCode>!
+static readonly NuGet.Common.PrototypeEventSource.Log -> System.Diagnostics.Tracing.EventSource!

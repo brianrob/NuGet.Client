@@ -21,8 +21,6 @@ namespace NuGet.DependencyResolver
 {
     public class RemoteDependencyWalker
     {
-        private static readonly EventSource Log = new EventSource("NuGet-RemoteDependencyWalker");
-
         private readonly RemoteWalkContext _context;
 
         public RemoteDependencyWalker(RemoteWalkContext context)
@@ -32,7 +30,9 @@ namespace NuGet.DependencyResolver
 
         public async Task<GraphNode<RemoteResolveResult>> WalkAsync(LibraryRange library, NuGetFramework framework, string runtimeIdentifier, RuntimeGraph runtimeGraph, bool recursive)
         {
-            Log.Write("WalkAsync", new { Library = library.Name, VersionRange = library?.VersionRange?.ToString() });
+#if false
+            PrototypeEventSource.Log.Write("WalkAsync", new { Library = library.Name, VersionRange = library?.VersionRange?.ToString() });
+#endif
             var transitiveCentralPackageVersions = new TransitiveCentralPackageVersions();
             var globalPackageList = new GlobalPackageList();
             var rootNode = await CreateGraphNodeAsync(
@@ -46,7 +46,8 @@ namespace NuGet.DependencyResolver
                 globalPackageList: globalPackageList,
                 hasParentNodes: false);
 
-            if (Log.IsEnabled())
+#if false
+            if (PrototypeEventSource.Log.IsEnabled())
             {
                 Dictionary<string, int> packageHitCount = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
                 int directChildren = rootNode.InnerNodes.Count;
@@ -75,13 +76,14 @@ namespace NuGet.DependencyResolver
                     }
                 }
 
-                Log.Write("WalkAsyncResultStart", new { Library = library.Name, DirectChildren = directChildren, TransitiveChildren = transitiveChildren });
+                PrototypeEventSource.Log.Write("WalkAsyncResultStart", new { Library = library.Name, DirectChildren = directChildren, TransitiveChildren = transitiveChildren });
                 foreach (KeyValuePair<string, int> package in packageHitCount)
                 {
-                    Log.Write("WalkAsyncTransitivePackage", new { Package = package.Key, TransitiveHitCount = package.Value });
+                    PrototypeEventSource.Log.Write("WalkAsyncTransitivePackage", new { Package = package.Key, TransitiveHitCount = package.Value });
                 }
-                Log.Write("WalkAsyncResultStop");
+                PrototypeEventSource.Log.Write("WalkAsyncResultStop");
             }
+#endif
 
             // do not calculate the hashset of the direct dependencies for cases when there are not any elements in the transitiveCentralPackageVersions queue
             var indexedDirectDependenciesKeyNames = new Lazy<HashSet<string>>(
@@ -139,26 +141,26 @@ namespace NuGet.DependencyResolver
             // BRIANROB: item.Data.Dependencies contains the direct dependencies for this node.
             // Before we call EvaluateDependencies, we need to see if we've already seen the dependency.  If we have, then we should adjust it's version if required,
             // and then we should remove the node so that it doesn't get reevaluated.
-            List<LibraryDependency> toRemove = new List<LibraryDependency>();
-            foreach (LibraryDependency dependency in item.Data.Dependencies)
-            {
-                if (globalPackageList.AddOrUpdatePackage(dependency.Name, dependency.LibraryRange.VersionRange))
-                {
-                    // The package was added to the global package list, so we should keep it in the graph.
-                    continue;
-                }
+            //List<LibraryDependency> toRemove = new List<LibraryDependency>();
+            //foreach (LibraryDependency dependency in item.Data.Dependencies)
+            //{
+            //    if (globalPackageList.AddOrUpdatePackage(dependency.Name, dependency.LibraryRange.VersionRange))
+            //    {
+            //        // The package was added to the global package list, so we should keep it in the graph.
+            //        continue;
+            //    }
 
-                // The package was not added to the global package list, so we should remove it from the graph.
-                toRemove.Add(dependency);
-            }
+            //    // The package was not added to the global package list, so we should remove it from the graph.
+            //    toRemove.Add(dependency);
+            //}
 
-            if (toRemove.Count > 0)
-            {
-                foreach(LibraryDependency dependency in toRemove)
-                {
-                    item.Data.Dependencies.Remove(dependency);
-                }
-            }
+            //if (toRemove.Count > 0)
+            //{
+            //    foreach(LibraryDependency dependency in toRemove)
+            //    {
+            //        item.Data.Dependencies.Remove(dependency);
+            //    }
+            //}
 
             bool hasInnerNodes = (item.Data.Dependencies.Count + (runtimeDependencies == null ? 0 : runtimeDependencies.Count)) > 0;
             GraphNode<RemoteResolveResult> node = new GraphNode<RemoteResolveResult>(libraryRange, hasInnerNodes, hasParentNodes)

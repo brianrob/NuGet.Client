@@ -25,8 +25,26 @@ namespace NuGet.ProjectModel
         private bool _isReadOnly;
         private int _nestLevel;
         private readonly CircularMemoryStream _stream;
-        private readonly StreamWriter _streamWriter;
+        private readonly InstrumentedStreamWriter _streamWriter;
         private readonly JsonTextWriter _writer;
+
+        private class InstrumentedStreamWriter : StreamWriter
+        {
+            private long _bytesWritten = 0;
+
+            public InstrumentedStreamWriter(Stream stream)
+                : base(stream)
+            {
+            }
+
+            public override void Write(char c)
+            {
+                base.Write(c);
+                _bytesWritten += 2;
+            }
+
+            public long BytesWritten {get { return _bytesWritten; } }
+        }
 
         /// <summary>
         /// Creates a new instance with the provide hash function.
@@ -42,7 +60,7 @@ namespace NuGet.ProjectModel
             _buffer = new byte[DefaultBufferSize];
             _hashFunc = hashFunc;
             _stream = new CircularMemoryStream(_buffer);
-            _streamWriter = new StreamWriter(_stream);
+            _streamWriter = new InstrumentedStreamWriter(_stream);
             _writer = new JsonTextWriter(_streamWriter);
 
             _stream.OnFlush += OnFlush;
@@ -256,6 +274,13 @@ namespace NuGet.ProjectModel
             _writer.WriteEndArray();
 
             --_nestLevel;
+        }
+
+        public long GetBytesWritten()
+        {
+            ThrowIfDisposed();
+
+            return _streamWriter.BytesWritten;
         }
 
         private void OnFlush(object sender, ArraySegment<byte> bytes)

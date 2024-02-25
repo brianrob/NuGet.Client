@@ -303,7 +303,9 @@ namespace NuGet.ProjectModel
             using (var writer = new HashObjectWriter(hashFunc))
             {
                 Write(writer, hashing: true, PackageSpecWriter.Write);
-                return writer.GetHash();
+                string ret = writer.GetHash();
+                PrototypeEventSource.Log.Write("HashObjectWriterBytesWritten", new { LengthInBytes = writer.GetBytesWritten() });
+                return ret;
             }
         }
 

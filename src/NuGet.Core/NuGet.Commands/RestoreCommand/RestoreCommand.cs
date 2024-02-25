@@ -191,7 +191,9 @@ namespace NuGet.Commands
                         telemetry.StartIntervalMeasure();
                         bool noOp;
                         TimeSpan? cacheFileAge;
+                        PrototypeEventSource.Log.Write("CalculateAndWriteDependencySpecStart", new { _request.Project.FilePath });
                         (cacheFile, noOp, cacheFileAge) = EvaluateCacheFile();
+                        PrototypeEventSource.Log.Write("CalculateAndWriteDependencySpecStop", new { _request.Project.FilePath });
                         telemetry.TelemetryEvent[NoOpCacheFileEvaluationResult] = noOp;
                         telemetry.EndIntervalMeasure(NoOpCacheFileEvaluateDuration);
                         if (noOp)
@@ -277,6 +279,7 @@ namespace NuGet.Commands
                 {
                     using (telemetry.StartIndependentInterval(GenerateRestoreGraphDuration))
                     {
+                        PrototypeEventSource.Log.Write("CreateRestoreGraphStart", new { Project = _request.Project.FilePath });
                         // Restore
                         graphs = await ExecuteRestoreAsync(
                         _request.DependencyProviders.GlobalPackages,
@@ -284,6 +287,7 @@ namespace NuGet.Commands
                         contextForProject,
                         token,
                         telemetry);
+                        PrototypeEventSource.Log.Write("CreateRestoreGraphStop", new { Project = _request.Project.FilePath });
                     }
                 }
                 else
@@ -316,12 +320,14 @@ namespace NuGet.Commands
 
                 telemetry.StartIntervalMeasure();
                 // Create assets file
+                PrototypeEventSource.Log.Write("BuildAssetsFileStart", new { ProjectFile = _request.Project.FilePath });
                 LockFile assetsFile = BuildAssetsFile(
                     _request.ExistingLockFile,
                     _request.Project,
                     graphs,
                     localRepositories,
                     contextForProject);
+                PrototypeEventSource.Log.Write("BuildAssetsFileStop", new { ProjectFile = _request.Project.FilePath });
                 telemetry.EndIntervalMeasure(GenerateAssetsFileDuration);
 
                 IList<CompatibilityCheckResult> checkResults = null;
