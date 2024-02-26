@@ -162,27 +162,35 @@ namespace NuGet.Commands
             var isTool = ProjectStyle == ProjectStyle.DotnetCliTool;
 
             // Commit the assets file to disk.
+            PrototypeEventSource.Log.Write("WriteLockFileStart", new { FilePath = LockFilePath });
             await CommitAssetsFileAsync(
                 lockFileFormat,
                 result: this,
                 log: log,
                 toolCommit: isTool,
                 token: token);
+            PrototypeEventSource.Log.Write("WriteLockFileStop", new { FilePath = LockFilePath });
 
             //Commit the cache file to disk
+            PrototypeEventSource.Log.Write("WriteCacheFileStart", new { FilePath = CacheFilePath });
             await CommitCacheFileAsync(
                 log: log,
                 toolCommit: isTool);
+            PrototypeEventSource.Log.Write("WriteCacheFileStop", new { FilePath = CacheFilePath });
 
             // Commit the lock file to disk
+            PrototypeEventSource.Log.Write("WritePackagesLockFileStart", new { FilePath = _newPackagesLockFilePath });
             await CommitLockFileAsync(
                 log: log,
                 toolCommit: isTool);
+            PrototypeEventSource.Log.Write("WritePackagesLockFileStop", new { FilePath = _newPackagesLockFilePath });
 
             // Commit the dg spec file to disk
+            PrototypeEventSource.Log.Write("WriteDgSpecFileStart", new { FilePath = _dependencyGraphSpecFilePath });
             await CommitDgSpecFileAsync(
                 log: log,
                 toolCommit: isTool);
+            PrototypeEventSource.Log.Write("WriteDgSpecFileStop", new { FilePath = _dependencyGraphSpecFilePath });
         }
 
         private async Task CommitAssetsFileAsync(
